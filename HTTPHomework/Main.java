@@ -12,6 +12,9 @@ public class Main {
 	// name of the configuration file resising in the same directory as this class
 	public static final String configurationFileName = "replay-config.txt";
 	
+	// default device
+	public static final int myDeviceNumber = 1;
+	
 	// configuration object
 	private static CommandReplayConfiguration crc;
 
@@ -25,7 +28,7 @@ public class Main {
 		System.out.println(crc);
 		
 		// why 1? because my wireless card is the second (index = 1) device according to jpcap
-		Sniffer s = new Sniffer(1);
+		Sniffer s = new Sniffer(myDeviceNumber);
 		s.start();
 	}
 
