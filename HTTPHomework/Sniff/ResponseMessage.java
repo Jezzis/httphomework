@@ -6,13 +6,23 @@ public class ResponseMessage {
 	private int src_port;
 	private int dst_port;
 	private String headers;
+	private int matchingRequestMessageIndex;
+	private int segmentCount;
+	private boolean isComplete;
+	private int contentLength;
+	private int receivedContentLength;
 	
-	public ResponseMessage(String src_ip, int src_port, String dst_ip, int dst_port, String headers) {
+	public ResponseMessage(String src_ip, int src_port, String dst_ip, int dst_port, String headers, int length, int receivedLength) {
 		this.src_ip = src_ip;
 		this.dst_ip = dst_ip;
 		this.src_port = src_port;
 		this.dst_port = dst_port;
 		this.headers = headers;
+		this.matchingRequestMessageIndex = -1;
+		this.segmentCount = 1;
+		this.isComplete = false;
+		this.receivedContentLength = receivedLength;
+		this.contentLength = length;
 	}
 
 	public String getDst_ip() {
@@ -53,6 +63,46 @@ public class ResponseMessage {
 
 	public void setSrc_port(int src_port) {
 		this.src_port = src_port;
+	}
+
+	public boolean isComplete() {
+		return isComplete;
+	}
+
+	public void setComplete(boolean isComplete) {
+		this.isComplete = isComplete;
+	}
+
+	public int getMatchingRequestMessageIndex() {
+		return matchingRequestMessageIndex;
+	}
+
+	public void setMatchingRequestMessageIndex(int matchingRequestMessageIndex) {
+		this.matchingRequestMessageIndex = matchingRequestMessageIndex;
+	}
+
+	public int getSegmentCount() {
+		return segmentCount;
+	}
+
+	public void setSegmentCount(int segmentCount) {
+		this.segmentCount = segmentCount;
+	}
+
+	public int getReceivedContentLength() {
+		return receivedContentLength;
+	}
+
+	public void setReceivedContentLength(int receivedContentLength) {
+		this.receivedContentLength = receivedContentLength;
+	}
+
+	public int getContentLength() {
+		return contentLength;
+	}
+
+	public void setContentLength(int contentLength) {
+		this.contentLength = contentLength;
 	}
 	
 }
