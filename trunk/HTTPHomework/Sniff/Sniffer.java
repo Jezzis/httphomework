@@ -17,17 +17,23 @@ import jpcap.PacketReceiver;
 
 public class Sniffer implements PacketReceiver {
 	private static final int REQUEST_LIMIT = 10;
+	private static final int LF_LENGTH = new String("\n").getBytes().length;
+	private static final int CR_LENGTH = LF_LENGTH;
 	private int deviceNumber;
 	private int requestCount;
 	private int responseCount;
 	private JpcapCaptor jpcap;
 	private ArrayList <RequestMessage> requestMessages;
+	private ArrayList <RequestMessage> incompleteRequestMessages;
+	private ArrayList <ResponseMessage> responseMessages;
 	
 	public Sniffer(int device) {
 		this.requestCount = 0;
 		this.responseCount = 0;
 		this.deviceNumber = device;
 		this.requestMessages = new ArrayList <RequestMessage> (REQUEST_LIMIT);
+		this.incompleteRequestMessages = new ArrayList <RequestMessage> (REQUEST_LIMIT);
+		this.responseMessages = new ArrayList <ResponseMessage> (REQUEST_LIMIT);
 	}
 
 	public void start() {
@@ -45,7 +51,7 @@ public class Sniffer implements PacketReceiver {
 	}
 	
 	public void receivePacket(Packet packet) {
-		if(requestCount >= REQUEST_LIMIT && requestMessages.isEmpty()) {
+		if(requestCount > REQUEST_LIMIT && incompleteRequestMessages.isEmpty()) {
 			System.exit(0);
 		}
 //		System.out.println("> " + packet.toString());
@@ -64,15 +70,18 @@ public class Sniffer implements PacketReceiver {
 			+ req.getTimestamp();
 			
 			parameters = req.getHeaders().split("\\s")[1].split("\\?")[1].split("\\&");
+			System.out.println(">> " + folderName);
 		}
 		
 		else {
+			System.out.println(">>HEREEE");
 			folderName = req.getHeaders().split("\\s")[0] + "_"
 			+ req.getDst_ip() + "_"
 			+ req.getHeaders().split("\\s")[1] + "_"
 			+ req.getTimestamp();
 		}
-			
+		System.out.println(">> " + folderName);
+		
 		folderName = folderName.replace("/", "-");
 		folderName = folderName.replace("?", "-");
 		folderName = folderName.replace("\\", "-");
@@ -134,7 +143,8 @@ public class Sniffer implements PacketReceiver {
 				+ res.getSrc_ip() + " "
 				+ res.getSrc_port() + " "
 				+ res.getDst_ip() + " "
-				+ res.getDst_port();
+				+ res.getDst_port() + " "
+				+ res.getSegmentCount();
 
 			bw.write(headLine);
 			bw.newLine();
@@ -163,11 +173,12 @@ public class Sniffer implements PacketReceiver {
 		 */
 		// holds the whole message in an array
 		String message = "";
-		
+
 		// double-checking -- "tcp" filter guarantees that anyway
 		if(packet instanceof TCPPacket) {
 			TCPPacket tempPacket = (TCPPacket) packet;
 			int byteCount;
+			int contentLength = 0;
 			
 			try {
 				BufferedReader br = new BufferedReader(new StringReader(new String(packet.data)));
@@ -176,66 +187,110 @@ public class Sniffer implements PacketReceiver {
 				
 				if(temp == null || !temp.contains("HTTP")) {
 					byteCount = 0;
-					while(temp != null) {
-						System.out.println("[" + temp.getBytes().length + "]" + temp);
-						byteCount += temp.getBytes().length;
-						temp = br.readLine();
+//					while(temp != null) {
+//						System.out.println("[" + temp.getBytes().length + "]" + temp);
+//						byteCount += temp.getBytes().length + LF_LENGTH + CR_LENGTH;
+//						temp = br.readLine();
+//					}
+//					
+//					byteCount--;
+					
+					System.out.println("TCP > " + tempPacket.data.length + " | " + byteCount + "|" + (tempPacket.data.length - byteCount));
+
+					for(int i = 0; i < responseMessages.size(); i++){
+						System.out.println(">>>response src: "+responseMessages.get(i).getSrc_port());
+						System.out.println(">>>temp src: "+tempPacket.src_port);
+						System.out.println(">>>response dst: "+responseMessages.get(i).getDst_port());
+						System.out.println(">>>temp dst: "+tempPacket.dst_port);
+						if(responseMessages.get(i).getSrc_port() == tempPacket.dst_port
+								&& responseMessages.get(i).getDst_port() == tempPacket.src_port){
+							responseMessages.get(i).setReceivedContentLength(responseMessages.get(i).getReceivedContentLength() + tempPacket.data.length);
+							System.out.println(">>>Received Content Length:" + responseMessages.get(i).getReceivedContentLength());
+							System.out.println(">>>Content Length:" + responseMessages.get(i).getContentLength());
+							if(responseMessages.get(i).getReceivedContentLength() == responseMessages.get(i).getContentLength()){
+								responseMessages.get(i).setSegmentCount(responseMessages.get(i).getSegmentCount()+1);
+								//isComplete?
+								responseMessages.get(i).setComplete(true); 
+								System.out.println(">>> Segment Count: " + responseMessages.get(i).getSegmentCount());
+								writeMetadata(requestMessages.get(responseMessages.get(i).getMatchingRequestMessageIndex()), responseMessages.get(i));
+								requestMessages.remove(responseMessages.get(i).getMatchingRequestMessageIndex());
+								responseMessages.remove(i);
+								break;
+							}
+							else{
+								//if(!responseMessages.get(i).isComplete()){
+								responseMessages.get(i).setSegmentCount(responseMessages.get(i).getSegmentCount()+1);
+							}
+
+						}
 					}
-					
-					System.out.println("TCP > " + tempPacket.sequence + " | " + byteCount);
-					
+
 					return;
 				}
 				
 				// read the application layer information (HTTP-related)
 				// if request push into the request array
-				if(checkIfRequest(temp) && requestCount < REQUEST_LIMIT) {
+				if(checkIfRequest(temp) && requestCount <= REQUEST_LIMIT) {
 					requestCount++;
-//					System.out.println("> " + temp);
 					while((temp = br.readLine()).length() > 0) {
-//						System.out.println("> " + temp);
 						message = message + temp + "[NEWLINE]";
 					}
 					
 					System.out.println("HTTP REQ > " + tempPacket.sequence);
 					
 					message = message.trim();
-					requestMessages.add(new RequestMessage(tempPacket.src_ip.getHostAddress(), tempPacket.src_port, tempPacket.dst_ip.getHostAddress(), tempPacket.dst_port, java.lang.System.currentTimeMillis(), message));
+					incompleteRequestMessages.add(new RequestMessage(tempPacket.src_ip.getHostAddress(), tempPacket.src_port, tempPacket.dst_ip.getHostAddress(), tempPacket.dst_port, java.lang.System.currentTimeMillis(), message));
 				}
 				
 				// else push into the response array
 				else if(checkifResponse(temp)) {
 					RequestMessage matchingRequest = responseExpected(tempPacket);
-					
+					byteCount = 0;
+					byteCount += temp.getBytes().length + LF_LENGTH + CR_LENGTH;
 					if(matchingRequest != null) {
-//						System.out.println("> " + temp);
 						System.out.println("[" + temp.getBytes().length + "]" + temp);
 						while((temp = br.readLine()).length() > 0) {
-//							System.out.println("> " + temp);
+							if(temp.startsWith("Content-Length:"))
+							{
+								contentLength = Integer.parseInt(temp.split(": ")[1]);
+							}
+							byteCount += temp.getBytes().length + LF_LENGTH + CR_LENGTH;
 							System.out.println("[" + temp.getBytes().length + "]" + temp);
 							message = message + temp + "[NEWLINE]";
 						}
-						
-						temp = br.readLine();
+
+						System.out.println(">" + temp + "<");
+						byteCount += LF_LENGTH + CR_LENGTH;
+//						System.out.println(">>>" + byteCount);
+//						temp = br.readLine();
+//						System.out.println(">" + temp + "<");
 						
 						// data starts here
-						byteCount = 0;
-						ArrayList <byte[]> byteList = new ArrayList <byte[]> ();
+//						byteCount = 0;
+//						ArrayList <byte[]> byteList = new ArrayList <byte[]> ();
+//						
+//						while(temp != null) {
+//							System.out.println("[" + temp.getBytes().length + "]" + temp);
+//							byteCount += temp.getBytes().length + LF_LENGTH + CR_LENGTH;
+//////							byteList.add(temp.getBytes());
+//							temp = br.readLine();
+//						}
 						
-						while(temp != null) {
-							System.out.println("[" + temp.getBytes().length + "]" + temp);
-							byteCount += temp.getBytes().length;
-							byteList.add(temp.getBytes());
-							temp = br.readLine();
-//							System.out.println(">>>>>>" + data.length);
+						System.out.println("HTTP RES > " + tempPacket.data.length + " | " + byteCount + "|" + (tempPacket.data.length - byteCount));
+
+						message = message.trim();
+						responseMessages.add(new ResponseMessage(tempPacket.dst_ip.getHostAddress(), tempPacket.dst_port, tempPacket.src_ip.getHostAddress(), tempPacket.src_port, message, contentLength, tempPacket.data.length - byteCount));
+//						writeData(byteList, );
+						incompleteRequestMessages.remove(matchingRequest);
+						
+						if(responseMessages.get(responseMessages.size()-1).getContentLength() <= tempPacket.data.length - byteCount)
+							writeMetadata(requestMessages.get(responseMessages.get(responseMessages.size()-1).getMatchingRequestMessageIndex()), responseMessages.get(responseMessages.size()-1));
+						else{
+							requestMessages.add(matchingRequest);
+							responseMessages.get(responseMessages.size()-1).setMatchingRequestMessageIndex(requestMessages.indexOf(matchingRequest));	
 						}
 						
-						System.out.println("HTTP RES > " + tempPacket.sequence + " | " + byteCount);
-
-						message = message.trim();						
-						writeData(byteList, writeMetadata(matchingRequest, new ResponseMessage(tempPacket.dst_ip.getHostAddress(), tempPacket.dst_port, tempPacket.src_ip.getHostAddress(), tempPacket.src_port, message)));
-						requestMessages.remove(matchingRequest);
-					}
+						}
 				}
 			}
 			
@@ -261,19 +316,15 @@ public class Sniffer implements PacketReceiver {
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
-		
-
-			
-		
 	}
 
 	private RequestMessage responseExpected(TCPPacket tempPacket) {
 		int count;		
-		for(count = 0; count < requestMessages.size(); count++) {
-			String src_ip = requestMessages.get(count).getSrc_ip();
-			String src_port = Integer.toString(requestMessages.get(count).getSrc_port());
-			String dst_ip = requestMessages.get(count).getDst_ip();
-			String dst_port = Integer.toString(requestMessages.get(count).getDst_port());
+		for(count = 0; count < incompleteRequestMessages.size(); count++) {
+			String src_ip = incompleteRequestMessages.get(count).getSrc_ip();
+			String src_port = Integer.toString(incompleteRequestMessages.get(count).getSrc_port());
+			String dst_ip = incompleteRequestMessages.get(count).getDst_ip();
+			String dst_port = Integer.toString(incompleteRequestMessages.get(count).getDst_port());
 			
 //			System.out.println("." + src_ip + ".=." + tempPacket.dst_ip.getHostAddress() + ".");
 //			System.out.println("." + src_port + ".=." + tempPacket.dst_port + ".");
@@ -288,7 +339,7 @@ public class Sniffer implements PacketReceiver {
 //				if(responseCount == 10 && responseCount == requestCount) {
 //					doneCapturing = true;
 //				}
-				return requestMessages.get(count);
+				return incompleteRequestMessages.get(count);
 			}
 		}
 		
