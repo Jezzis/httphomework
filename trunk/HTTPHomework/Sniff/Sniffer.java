@@ -26,7 +26,7 @@ public class Sniffer implements PacketReceiver {
 	private ArrayList <RequestMessage> requestMessages;
 	private ArrayList <RequestMessage> incompleteRequestMessages;
 	private ArrayList <ResponseMessage> responseMessages;
-	
+
 	public Sniffer(int device) {
 		this.requestCount = 0;
 		this.responseCount = 0;
@@ -59,7 +59,7 @@ public class Sniffer implements PacketReceiver {
 		System.out.println("---------" + requestCount + "----------");
 	}
 
-	private String writeMetadata(RequestMessage req, ResponseMessage res) {
+	private String createFolder(RequestMessage req){
 		String folderName;
 		String parameters[] = {};
 		
@@ -74,7 +74,6 @@ public class Sniffer implements PacketReceiver {
 		}
 		
 		else {
-			System.out.println(">>HEREEE");
 			folderName = req.getHeaders().split("\\s")[0] + "_"
 			+ req.getDst_ip() + "_"
 			+ req.getHeaders().split("\\s")[1] + "_"
@@ -94,7 +93,16 @@ public class Sniffer implements PacketReceiver {
 			
 		System.out.println(">> " + folderName);
 		new File(folderName).mkdir();
-			
+		
+		return folderName;
+		
+	}
+
+	private String writeMetadata(RequestMessage req, ResponseMessage res, String folderName) {
+		String parameters [] = {};
+		if(req.getHeaders().contains("?")){
+			parameters = req.getHeaders().split("\\s")[1].split("\\?")[1].split("\\&");
+		}
 		// write the request/response information
 		try {				
 			FileWriter fw = new FileWriter(folderName + File.separator + "metadata.txt");
@@ -198,21 +206,23 @@ public class Sniffer implements PacketReceiver {
 					System.out.println("TCP > " + tempPacket.data.length + " | " + byteCount + "|" + (tempPacket.data.length - byteCount));
 
 					for(int i = 0; i < responseMessages.size(); i++){
-						System.out.println(">>>response src: "+responseMessages.get(i).getSrc_port());
-						System.out.println(">>>temp src: "+tempPacket.src_port);
-						System.out.println(">>>response dst: "+responseMessages.get(i).getDst_port());
-						System.out.println(">>>temp dst: "+tempPacket.dst_port);
+						//System.out.println(">>>response src: "+responseMessages.get(i).getSrc_port());
+						//System.out.println(">>>temp src: "+tempPacket.src_port);
+						//System.out.println(">>>response dst: "+responseMessages.get(i).getDst_port());
+						//System.out.println(">>>temp dst: "+tempPacket.dst_port);
 						if(responseMessages.get(i).getSrc_port() == tempPacket.dst_port
 								&& responseMessages.get(i).getDst_port() == tempPacket.src_port){
 							responseMessages.get(i).setReceivedContentLength(responseMessages.get(i).getReceivedContentLength() + tempPacket.data.length);
 							System.out.println(">>>Received Content Length:" + responseMessages.get(i).getReceivedContentLength());
 							System.out.println(">>>Content Length:" + responseMessages.get(i).getContentLength());
+							writeData(tempPacket.data, 0, tempPacket.data.length-1, requestMessages.get(responseMessages.get(i).getMatchingRequestMessageIndex()).getFolderName() );
 							if(responseMessages.get(i).getReceivedContentLength() == responseMessages.get(i).getContentLength()){
 								responseMessages.get(i).setSegmentCount(responseMessages.get(i).getSegmentCount()+1);
 								//isComplete?
-								responseMessages.get(i).setComplete(true); 
+								//responseMessages.get(i).setComplete(true); 
 								System.out.println(">>> Segment Count: " + responseMessages.get(i).getSegmentCount());
-								writeMetadata(requestMessages.get(responseMessages.get(i).getMatchingRequestMessageIndex()), responseMessages.get(i));
+								System.out.println(">>> Folder Name: " + requestMessages.get(responseMessages.get(i).getMatchingRequestMessageIndex()).getFolderName());
+								writeMetadata(requestMessages.get(responseMessages.get(i).getMatchingRequestMessageIndex()), responseMessages.get(i), requestMessages.get(responseMessages.get(i).getMatchingRequestMessageIndex()).getFolderName());
 								requestMessages.remove(responseMessages.get(i).getMatchingRequestMessageIndex());
 								responseMessages.remove(i);
 								break;
@@ -220,6 +230,7 @@ public class Sniffer implements PacketReceiver {
 							else{
 								//if(!responseMessages.get(i).isComplete()){
 								responseMessages.get(i).setSegmentCount(responseMessages.get(i).getSegmentCount()+1);
+								//writeData
 							}
 
 						}
@@ -239,7 +250,9 @@ public class Sniffer implements PacketReceiver {
 					System.out.println("HTTP REQ > " + tempPacket.sequence);
 					
 					message = message.trim();
-					incompleteRequestMessages.add(new RequestMessage(tempPacket.src_ip.getHostAddress(), tempPacket.src_port, tempPacket.dst_ip.getHostAddress(), tempPacket.dst_port, java.lang.System.currentTimeMillis(), message));
+					RequestMessage req = new RequestMessage(tempPacket.src_ip.getHostAddress(), tempPacket.src_port, tempPacket.dst_ip.getHostAddress(), tempPacket.dst_port, java.lang.System.currentTimeMillis(), message);
+					req.setFolderName(createFolder(req));
+					incompleteRequestMessages.add(req);
 				}
 				
 				// else push into the response array
@@ -272,7 +285,7 @@ public class Sniffer implements PacketReceiver {
 //						while(temp != null) {
 //							System.out.println("[" + temp.getBytes().length + "]" + temp);
 //							byteCount += temp.getBytes().length + LF_LENGTH + CR_LENGTH;
-//////							byteList.add(temp.getBytes());
+//							byteList.add(temp.getBytes());
 //							temp = br.readLine();
 //						}
 						
@@ -280,37 +293,53 @@ public class Sniffer implements PacketReceiver {
 
 						message = message.trim();
 						responseMessages.add(new ResponseMessage(tempPacket.dst_ip.getHostAddress(), tempPacket.dst_port, tempPacket.src_ip.getHostAddress(), tempPacket.src_port, message, contentLength, tempPacket.data.length - byteCount));
-//						writeData(byteList, );
+						
+						
+						for(int i = 0; i < incompleteRequestMessages.size(); i++){
+							if(incompleteRequestMessages.get(i).getSrc_port() == tempPacket.dst_port
+									&& incompleteRequestMessages.get(i).getDst_port() == tempPacket.src_port){
+								writeData(tempPacket.data, byteCount, tempPacket.data.length - byteCount, incompleteRequestMessages.get(i).getFolderName());
+							}
+						}
+						
 						incompleteRequestMessages.remove(matchingRequest);
 						
+						/*
 						if(responseMessages.get(responseMessages.size()-1).getContentLength() <= tempPacket.data.length - byteCount)
 							writeMetadata(requestMessages.get(responseMessages.get(responseMessages.size()-1).getMatchingRequestMessageIndex()), responseMessages.get(responseMessages.size()-1));
 						else{
+						*/
 							requestMessages.add(matchingRequest);
 							responseMessages.get(responseMessages.size()-1).setMatchingRequestMessageIndex(requestMessages.indexOf(matchingRequest));	
-						}
+						//}
+						
 						
 						}
-				}
-			}
+					}
+				
 			
+			}
 			catch (IOException e) {
 				System.out.println("[E] Failed to parse the TCP packet.");
 			}
 		}
 	}
 
-	private void writeData(ArrayList <byte[]> byteList, String folder) {
+	private void writeData(byte[] data, int offset, int length, String folder) {
 		// write the data			
 		try {
-			FileOutputStream fo = new FileOutputStream(new File(folder + File.separator + "data"));
+			// append data to the file
+			FileOutputStream fo = new FileOutputStream(new File(folder + File.separator + "data"), true);
 			DataOutputStream dos = new DataOutputStream(fo);
+			//dos.write(data);
+			dos.write(data, offset, length);
 			
+			/*
 			int count;
 			for(count = 0; count < byteList.size(); count++) {
 				dos.write(byteList.get(count));
 			}
-			
+			*/
 			dos.close();
 			
 		} catch (IOException e) {
