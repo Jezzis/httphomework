@@ -7,6 +7,7 @@ public class RequestMessage {
 	private int dst_port;
 	private long timestamp;
 	private String headers;
+	private String folderName;
 	
 	public RequestMessage(String src_ip, int src_port, String dst_ip, int dst_port, long timestamp, String headers) {
 		this.src_ip = src_ip;
@@ -63,6 +64,14 @@ public class RequestMessage {
 
 	public void setTimestamp(long timestamp) {
 		this.timestamp = timestamp;
+	}
+
+	public String getFolderName() {
+		return folderName;
+	}
+
+	public void setFolderName(String folderName) {
+		this.folderName = folderName;
 	}
 	
 	
