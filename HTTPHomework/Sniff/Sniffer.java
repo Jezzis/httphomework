@@ -203,7 +203,7 @@ public class Sniffer implements PacketReceiver {
 //					
 //					byteCount--;
 					
-					System.out.println("TCP > " + tempPacket.data.length + " | " + byteCount + "|" + (tempPacket.data.length - byteCount));
+					System.out.println("TCP > length:" + tempPacket.data.length + " | seq: " + tempPacket.sequence + " | ack: " + tempPacket.ack_num);
 
 					for(int i = 0; i < responseMessages.size(); i++){
 						//System.out.println(">>>response src: "+responseMessages.get(i).getSrc_port());
@@ -215,24 +215,24 @@ public class Sniffer implements PacketReceiver {
 							responseMessages.get(i).setReceivedContentLength(responseMessages.get(i).getReceivedContentLength() + tempPacket.data.length);
 							System.out.println(">>>Received Content Length:" + responseMessages.get(i).getReceivedContentLength());
 							System.out.println(">>>Content Length:" + responseMessages.get(i).getContentLength());
-							writeData(tempPacket.data, 0, tempPacket.data.length-1, requestMessages.get(responseMessages.get(i).getMatchingRequestMessageIndex()).getFolderName() );
+//							writeData(tempPacket.data, 0, tempPacket.data.length-1, requestMessages.get(responseMessages.get(i).getMatchingRequestMessageIndex()).getFolderName() );
 							if(responseMessages.get(i).getReceivedContentLength() == responseMessages.get(i).getContentLength()){
 								responseMessages.get(i).setSegmentCount(responseMessages.get(i).getSegmentCount()+1);
 								//isComplete?
 								//responseMessages.get(i).setComplete(true); 
 								System.out.println(">>> Segment Count: " + responseMessages.get(i).getSegmentCount());
 								System.out.println(">>> Folder Name: " + requestMessages.get(responseMessages.get(i).getMatchingRequestMessageIndex()).getFolderName());
-								writeMetadata(requestMessages.get(responseMessages.get(i).getMatchingRequestMessageIndex()), responseMessages.get(i), requestMessages.get(responseMessages.get(i).getMatchingRequestMessageIndex()).getFolderName());
+//								writeMetadata(requestMessages.get(responseMessages.get(i).getMatchingRequestMessageIndex()), responseMessages.get(i), requestMessages.get(responseMessages.get(i).getMatchingRequestMessageIndex()).getFolderName());
 								requestMessages.remove(responseMessages.get(i).getMatchingRequestMessageIndex());
 								responseMessages.remove(i);
 								break;
 							}
+							
 							else{
 								//if(!responseMessages.get(i).isComplete()){
 								responseMessages.get(i).setSegmentCount(responseMessages.get(i).getSegmentCount()+1);
 								//writeData
 							}
-
 						}
 					}
 
@@ -247,10 +247,10 @@ public class Sniffer implements PacketReceiver {
 						message = message + temp + "[NEWLINE]";
 					}
 					
-					System.out.println("HTTP REQ > " + tempPacket.sequence);
+					System.out.println("HTTP REQ > seq: " + tempPacket.sequence + " | ack: " + tempPacket.ack_num);
 					
 					message = message.trim();
-					RequestMessage req = new RequestMessage(tempPacket.src_ip.getHostAddress(), tempPacket.src_port, tempPacket.dst_ip.getHostAddress(), tempPacket.dst_port, java.lang.System.currentTimeMillis(), message);
+					RequestMessage req = new RequestMessage(tempPacket.src_ip.getHostAddress(), tempPacket.src_port, tempPacket.dst_ip.getHostAddress(), tempPacket.dst_port, java.lang.System.currentTimeMillis(), message, tempPacket.sequence + tempPacket.data.length);
 					req.setFolderName(createFolder(req));
 					incompleteRequestMessages.add(req);
 				}
@@ -289,7 +289,7 @@ public class Sniffer implements PacketReceiver {
 //							temp = br.readLine();
 //						}
 						
-						System.out.println("HTTP RES > " + tempPacket.data.length + " | " + byteCount + "|" + (tempPacket.data.length - byteCount));
+						System.out.println("HTTP REQ > seq: " + tempPacket.sequence + " | ack: " + tempPacket.ack_num);
 
 						message = message.trim();
 						responseMessages.add(new ResponseMessage(tempPacket.dst_ip.getHostAddress(), tempPacket.dst_port, tempPacket.src_ip.getHostAddress(), tempPacket.src_port, message, contentLength, tempPacket.data.length - byteCount));
