@@ -8,14 +8,24 @@ public class RequestMessage {
 	private long timestamp;
 	private String headers;
 	private String folderName;
+	private long expectedAck;
 	
-	public RequestMessage(String src_ip, int src_port, String dst_ip, int dst_port, long timestamp, String headers) {
+	public long getExpectedAck() {
+		return expectedAck;
+	}
+
+	public void setExpectedAck(long expectedAck) {
+		this.expectedAck = expectedAck;
+	}
+
+	public RequestMessage(String src_ip, int src_port, String dst_ip, int dst_port, long timestamp, String headers, long expectedAck) {
 		this.src_ip = src_ip;
 		this.dst_ip = dst_ip;
 		this.src_port = src_port;
 		this.dst_port = dst_port;
 		this.timestamp = timestamp;
 		this.headers = headers;
+		this.expectedAck = expectedAck;
 	}
 
 	public String getDst_ip() {
