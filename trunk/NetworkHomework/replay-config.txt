@@ -1,0 +1,4 @@
+app-url=http://139.179.15.76/cs421/assign3/banking-app.php
+session-cookie-name=PHPSESSIONID
+req-param-name=command
+req-param-value=withdraw
