@@ -1,3 +1,4 @@
+package SessionHijack;
 /**
  * nazli & alper
  */
